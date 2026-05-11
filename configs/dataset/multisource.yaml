@@ -1,0 +1,23 @@
+# Multi-source domain generalization dataset template.
+# Build one merged index with tools/preprocess/build_dataset_index.py, or merge several
+# pickle indexes manually while preserving dataset/method/compression fields.
+
+name: "MultiSource-DG"
+data_root: "data/clips"
+index_path: "data/multisource_index.pkl"
+
+path_patterns:
+  - "FaceForensics++"
+  - "Celeb-DF-v2"
+  - "DFDC"
+  - "DeeperForensics"
+  - "WildDeepfake"
+
+split_ratios:
+  train: 0.8
+  val: 0.1
+  test: 0.1
+
+normalization:
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]

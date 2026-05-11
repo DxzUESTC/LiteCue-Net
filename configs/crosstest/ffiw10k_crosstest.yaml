@@ -1,0 +1,34 @@
+# ==========================================
+# FFIW10K-v1 Cross-Dataset Test Configuration
+# ==========================================
+# 用于在FFIW10K-v1数据集上测试在FF++上训练的模型权重
+# 使用FFIW10K-v1的验证集（val）进行泛化性测试
+
+name: "FFIW10K-v1-CrossTest"
+
+# --- 路径设置 ---
+# 这里的路径是相对于项目根目录的
+data_root: "data/clips/FFIW10K-v1-release-test"  # 视频片段文件夹（注意：没有 FFIW10K-v1-release 子目录）
+index_path: "data/index/FFIW10K-v1-release-test.pkl"  # 索引文件
+
+# --- 数据集过滤 (Dataset Filtering) ---
+# 使用FFIW10K-v1的验证集（val）进行跨数据集测试
+# 路径格式：
+#   - source/val/xxx (真实视频，验证集)
+#   - target/val/xxx (伪造视频，验证集)
+# path_patterns:
+#   - "/val"  # 匹配路径中包含"/val"的所有样本，即仅使用验证集
+
+# --- 划分策略 ---
+# Cross-Dataset 实验使用全量验证集数据进行测试
+split_ratios:
+  train: 0.0
+  val: 0.0
+  test: 1.0
+
+# --- 预处理参数 ---
+# 保持与训练时一致的归一化参数
+normalization:
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+

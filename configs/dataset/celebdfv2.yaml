@@ -1,0 +1,31 @@
+# ==========================================
+# Celeb-DF v2 Configuration
+# ==========================================
+
+name: "Celeb-DF v2"
+
+# --- 路径设置 ---
+# 这里的路径是相对于项目根目录的
+data_root: "data/clips"               # 视频片段文件夹
+index_path: "data/dataset_index.pkl"  # 索引文件
+
+# --- 数据集过滤 (Dataset Filtering) ---
+# 如果索引文件包含多个数据集，通过路径模式过滤出当前数据集
+# 支持多个模式，只要路径中包含任一模式即匹配
+path_patterns:
+  - "Celeb-real"      # Celeb-DF 真实视频 (Celebrity)
+  - "YouTube-real"    # Celeb-DF 真实视频 (YouTube)
+  - "Celeb-synthesis" # Celeb-DF 伪造视频
+
+# --- 划分策略 ---
+split_ratios:
+  train: 0.8
+  val: 0.1
+  test: 0.1
+
+# --- 预处理参数 ---
+# 如果不同数据集需要不同的归一化参数，也可以放在这里
+normalization:
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+

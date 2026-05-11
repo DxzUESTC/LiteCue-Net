@@ -1,0 +1,88 @@
+# ==========================================
+# LiteCue-Net Training Configuration
+# ==========================================
+
+# --- 路径设置 (Paths) ---
+# 这里的路径建议使用相对路径，相对于项目根目录
+save_dir: "checkpoints/exp_20260305"      # 模型保存路径
+log_dir: "logs"                      # 日志保存路径
+# 不硬编码 data_root，指定要用哪个数据集的配置文件
+dataset_config: "configs/dataset/faceforensics.yaml"
+
+# --- 训练超参 (Training Hyperparameters) ---
+epochs: 50            # 训练总轮数
+batch_size: 16        # 批次大小 (根据显存调整: 8G显存设16, 24G显存设64)
+lr: 0.0001            # 初始学习率 (1e-4)
+weight_decay: 0.0001  # 权重衰减
+num_workers: 0        # 数据加载线程数 (Windows建议设0调试，Linux设4-8)
+seed: 42              # 随机种子
+use_amp: true         # 是否开启混合精度训练 (推荐 True)
+
+# --- 模型结构 (Model Architecture) ---
+model:
+  feature_dim: 256
+  clip_num: 16      # M: 全局片段数
+  clip_len: 4       # K: 片段内帧数
+  num_classes: 2
+  backbone: "mobilenetv4_conv_small.e2400_r224_in1k"
+  token_dropout: 0.0          # >0 时训练阶段随机丢弃部分 clip token，提升时序鲁棒性
+  use_temporal_diff: false    # 显式建模相邻帧/特征差分
+  use_frequency_branch: false # 高通残差频域分支，捕捉压缩后仍稳定的伪造统计
+
+# --- 图像级域随机化增强 ---
+augmentation:
+  use_aug: false      # true 时启用 transforms.py 中的 JPEG/分辨率/颜色/仿射增强
+  level: "light"      # light | medium | strong_domain
+
+# --- 遮挡增强 (Occlusion Augmentation，仅训练集) ---
+# 对整段 clip 施加同一块随机遮挡，强制模型关注边缘与未遮挡区域，提升泛化。详见 doc/LiteCue-Net 遮挡增强说明.md
+occlusion:
+  enabled: true
+  prob: 0.5              # 每个样本应用遮挡的概率
+  scale_range: [0.1, 0.35]  # 遮挡面积占图像比例范围
+  fill: "mean"           # 填充值: "mean"(ImageNet 均值) 或数值
+  num_patches: 1         # 每段 clip 的遮挡块数 (1~4)
+
+# --- Tensor 级域随机化增强，仅训练集 ---
+domain_randomization:
+  enabled: false
+  occlusion:
+    enabled: true
+    prob: 0.5
+    scale_range: [0.05, 0.30]
+    fill: "mean"
+    num_patches: 2
+    edge_bias: 0.4
+  temporal:
+    enabled: true
+    drop_prob: 0.03
+    repeat_prob: 0.03
+    motion_blur_prob: 0.15
+    motion_blur_kernel: 5
+
+# --- 多源/类别/方法均衡采样 ---
+sampling:
+  balanced: false
+  balance_keys: ["label", "dataset", "method"]
+  replacement: true
+
+# --- 损失函数 (Loss Function) ---
+loss:
+  video_weight: 1.0
+  clip_weight: 1.0
+  focal_alpha: 0.25 # 针对样本不平衡 (Fake多Real少)
+  focal_gamma: 2.0  # 聚焦难分样本
+  label_smoothing: 0.0
+
+# --- 域泛化训练目标 ---
+generalization:
+  enabled: false
+  num_domains: 0
+  grl_lambda: 1.0
+  supcon_weight: 0.0
+  supcon_temperature: 0.2
+  coral_weight: 0.0
+  mmd_weight: 0.0
+  domain_adv_weight: 0.0
+  groupdro_weight: 0.0
+  groupdro_eta: 0.1

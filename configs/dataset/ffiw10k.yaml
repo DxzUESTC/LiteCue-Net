@@ -1,0 +1,53 @@
+# ==========================================
+# FFIW10K-v1 Configuration
+# ==========================================
+
+name: "FFIW10K-v1"
+
+# --- 路径设置 ---
+# 这里的路径是相对于项目根目录的
+data_root: "data/clips/FFIW10K-v1/FFIW10K-v1-release"  # 视频片段文件夹
+index_path: "data/index/FFIW10K-v1.pkl"  # 统一索引文件（包含train和val）
+
+# --- 数据集过滤 (Dataset Filtering) ---
+# 如果索引文件包含多个数据集，通过路径模式过滤出当前数据集
+# 支持多个模式，只要路径中包含任一模式即匹配
+# 
+# 对于FFIW10K-v1，路径格式为：
+#   - source/train/xxx (真实视频，训练集)
+#   - source/val/xxx (真实视频，验证集)
+#   - target/train/xxx (伪造视频，训练集)
+#   - target/val/xxx (伪造视频，验证集)
+#
+# 使用示例：
+#   1. 使用全部数据（训练+验证）：
+#      path_patterns:
+#        - "source"
+#        - "target"
+#
+#   2. 仅使用验证集（用于测试其他模型权重）：
+#      path_patterns:
+#        - "/val"  # 匹配路径中包含"/val"的所有样本
+#
+#   3. 仅使用训练集：
+#      path_patterns:
+#        - "/train"  # 匹配路径中包含"/train"的所有样本
+path_patterns:
+  - "source"  # 真实视频
+  - "target"  # 伪造视频
+
+# --- 划分策略 ---
+# 注意：FFIW10K-v1已经按照原数据集划分好了train和val
+# 如果使用统一索引文件，可以通过path_patterns来过滤
+# 如果使用单独的索引文件（FFIW10K-v1_train.pkl或FFIW10K-v1_val.pkl），
+# 则不需要path_patterns过滤
+split_ratios:
+  train: 0.8
+  val: 0.1
+  test: 0.1
+
+# --- 预处理参数 ---
+normalization:
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+
