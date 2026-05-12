@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 class IntraClipModule(nn.Module):
     """
@@ -31,6 +32,14 @@ class IntraClipModule(nn.Module):
             nn.SiLU(inplace=True)       # 激活函数
         )
         
+        # 可学习注意力池化 (Learnable Attention Pooling)
+        # 替代 mean pool，让模型学会关注 K 帧中"最可疑"的那一帧
+        self.attn_pool = nn.Sequential(
+            nn.Linear(input_dim, 64),
+            nn.SiLU(),
+            nn.Linear(64, 1),
+        )
+
         # 层归一化 (LayerNorm)
         # 在进入 Stage 2 (Gated-MLP) 之前对特征进行标准化，防止梯度爆炸
         self.norm = nn.LayerNorm(input_dim)
@@ -82,8 +91,12 @@ class IntraClipModule(nn.Module):
         # -----------------------------------------------------------
         # 既然已经提取完 K 帧内的关联了，我们不再需要保留每一帧
         # 对时间维度求平均 (Mean Pooling)，把 4 帧浓缩成 1 个代表性的向量
-        # (B*M, D, K) -> mean(dim=2) -> (B*M, D)
-        clip_tokens_flat = fused.mean(dim=2)
+        # 可学习注意力池化：让模型自己决定 K 帧中哪些帧更重要
+        # fused: (B*M, D, K) -> transpose -> (B*M, K, D)
+        # attn_weights: (B*M, K, 1) softmax over K
+        attn_weights = self.attn_pool(fused.transpose(1, 2))  # (B*M, K, 1)
+        attn_weights = F.softmax(attn_weights, dim=1)
+        clip_tokens_flat = (fused.transpose(1, 2) * attn_weights).sum(dim=1)  # (B*M, D)
         
         # -----------------------------------------------------------
         # 第五步：整理输出 (Final Reshape)

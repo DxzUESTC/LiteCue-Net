@@ -93,7 +93,8 @@ class Trainer:
             # --- [修改] 混合精度前向传播 (新版 API) ---
             # 使用 torch.amp.autocast 并指定 device_type='cuda'
             with torch.amp.autocast(self.device.type, enabled=self.config.get('use_amp', True) and self.device.type == 'cuda'):
-                need_features = self.config.get('generalization', {}).get('enabled', False)
+                need_features = (self.config.get('generalization', {}).get('enabled', False) or
+                                 self.config.get('loss', {}).get('entropy_weight', 0) > 0)
                 outputs = self.model(
                     images,
                     return_features=need_features,
@@ -104,10 +105,12 @@ class Trainer:
                     clip_logits = outputs['clip_logits']
                     features = outputs.get('features')
                     domain_logits = outputs.get('domain_logits')
+                    clip_entropy = outputs.get('clip_entropy')
                 else:
                     video_logits, clip_logits = outputs
                     features = None
                     domain_logits = None
+                    clip_entropy = None
                 loss, loss_dict = self.criterion(
                     video_logits,
                     clip_logits,
@@ -115,6 +118,7 @@ class Trainer:
                     features=features,
                     domain_labels=domain_labels,
                     domain_logits=domain_logits,
+                    clip_entropy=clip_entropy,
                 )
 
             # --- 反向传播与更新 ---
@@ -148,7 +152,9 @@ class Trainer:
                     f"Time {batch_time.val:.3f} ({batch_time.avg:.3f}) "
                     f"Data {data_time.val:.3f} ({data_time.avg:.3f}) "
                     f"Loss {losses.val:.4f} ({losses.avg:.4f}) "
-                    f"Acc {top1.val:.2f} ({top1.avg:.2f})"
+                    f"LossV {loss_v_meter.val:.4f} LossC {loss_c_meter.val:.4f} "
+                    f"Acc {top1.val:.2f} ({top1.avg:.2f}) "
+                    f"LR {self.optimizer.param_groups[0]['lr']:.2e}"
                 )
 
         return losses.avg, top1.avg
@@ -188,7 +194,10 @@ class Trainer:
 
         self.logger.info(
             f"Epoch [{epoch}] Validation Result: "
-            f"Loss: {losses.avg:.4f} | AUC: {auc:.2f}% | Acc: {acc:.2f}%"
+            f"Loss: {losses.avg:.4f} | AUC: {auc:.2f}% | Acc: {acc:.2f}% | "
+            f"AP: {metrics['ap']:.2f}% | EER: {metrics['eer']:.2f}% | "
+            f"TPR@1%FPR: {metrics['tpr_at_fpr_1']:.2f}% | "
+            f"TN/FP/FN/TP: {metrics['tn']}/{metrics['fp']}/{metrics['fn']}/{metrics['tp']}"
         )
         
         return losses.avg, auc, acc
@@ -201,14 +210,18 @@ class Trainer:
 
         for epoch in range(self.start_epoch, self.config['epochs'] + 1):
             train_loss, train_acc = self.train_epoch(epoch)
+            self.logger.info(
+                f"Epoch [{epoch}] Train Summary: Loss {train_loss:.4f} | Acc {train_acc:.2f}% | "
+                f"LR {self.optimizer.param_groups[0]['lr']:.2e}"
+            )
             val_loss, val_auc, val_acc = self.validate(epoch)
-            
+
             self.scheduler.step()
             
             is_best = val_auc > self.best_auc
             if is_best:
                 self.best_auc = val_auc
-                self.logger.info(f"⭐ New Best AUC: {self.best_auc:.2f}% (Epoch {epoch})")
+                self.logger.info(f"*** New Best AUC: {self.best_auc:.2f}% (Epoch {epoch})")
             
             save_checkpoint({
                 'epoch': epoch,
@@ -232,4 +245,4 @@ class Trainer:
             self.best_auc = best_auc
             self.logger.info(f"Resumed from epoch {self.start_epoch} with best AUC {self.best_auc:.2f}")
         except Exception as e:
-            self.logger.error(f"Failed to resume from {resume_path}: {e}")
+            self.logger.exception(f"Failed to resume from {resume_path}: {e}")

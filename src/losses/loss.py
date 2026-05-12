@@ -30,6 +30,7 @@ class LiteCueLoss(nn.Module):
         domain_adv_weight=0.0,
         groupdro_weight=0.0,
         groupdro_eta=0.1,
+        entropy_weight=0.0,
     ):
         """
         Args:
@@ -52,6 +53,7 @@ class LiteCueLoss(nn.Module):
         self.groupdro_weight = groupdro_weight
         self.groupdro_eta = groupdro_eta
         self.groupdro_state = None
+        self.entropy_weight = entropy_weight
         
         # 使用 Focal Loss 替代 CE Loss
         # alpha=0.25 是 RetinaNet 论文中的推荐值，
@@ -79,6 +81,7 @@ class LiteCueLoss(nn.Module):
         features=None,
         domain_labels=None,
         domain_logits=None,
+        clip_entropy=None,
     ):
         """
         Args:
@@ -144,6 +147,13 @@ class LiteCueLoss(nn.Module):
             )
             total_loss = total_loss + self.groupdro_weight * loss_groupdro
             loss_dict["loss_groupdro"] = loss_groupdro.item()
+
+        # 4. Clip 权重熵正则（防止权重退化到 one-hot）
+        if clip_entropy is not None and self.entropy_weight > 0:
+            # clip_entropy 是平均熵值，我们最大化熵 = 最小化 -entropy
+            loss_entropy = -clip_entropy
+            total_loss = total_loss + self.entropy_weight * loss_entropy
+            loss_dict["loss_entropy"] = loss_entropy.item()
 
         loss_dict["loss_total"] = total_loss.item()
         return total_loss, loss_dict

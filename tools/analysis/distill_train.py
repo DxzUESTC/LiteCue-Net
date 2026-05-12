@@ -65,6 +65,7 @@ def main():
         clip_len=config['model']['clip_len'],
         num_classes=config['model']['num_classes'],
         backbone_name=config['model']['backbone'],
+        temporal_module=config['model'].get('temporal_module', 'gated_mlp'),
     )
     teacher = LiteCueNet(**common_kwargs).to(device)
     teacher.load_state_dict(load_state_dict(args.teacher_checkpoint, device), strict=False)
@@ -75,6 +76,7 @@ def main():
         token_dropout=config['model'].get('token_dropout', 0.0),
         use_temporal_diff=config['model'].get('use_temporal_diff', False),
         use_frequency_branch=config['model'].get('use_frequency_branch', False),
+        frequency_fuse_block=config['model'].get('frequency_fuse_block', 2),
     ).to(device)
     optimizer = torch.optim.AdamW(student.parameters(), lr=config['lr'], weight_decay=config.get('weight_decay', 1e-4))
 

@@ -72,6 +72,9 @@ def main():
         backbone_name=config['model']['backbone'],
         token_dropout=config['model'].get('token_dropout', 0.0),
         use_temporal_diff=True,
+        use_frequency_branch=config['model'].get('use_frequency_branch', False),
+        frequency_fuse_block=config['model'].get('frequency_fuse_block', 2),
+        temporal_module=config['model'].get('temporal_module', 'gated_mlp'),
     ).to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=config.get('weight_decay', 1e-4))

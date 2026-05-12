@@ -135,9 +135,9 @@ class FFIWPairedProcessor:
         # 输出处理统计信息
         video_name = os.path.basename(fake_path)
         if saved_count == 0:
-            print(f"  ⚠️  {video_name}: 总帧数={total_frames}, 保存=0, 无人脸={no_face_count}, 无匹配目标={no_target_count}")
+            print(f"  [WARN] {video_name}: 总帧数={total_frames}, 保存=0, 无人脸={no_face_count}, 无匹配目标={no_target_count}")
         else:
-            print(f"  ✓ {video_name}: 总帧数={total_frames}, 已保存={saved_count} 帧")
+            print(f"  [OK] {video_name}: 总帧数={total_frames}, 已保存={saved_count} 帧")
 
 def main():
     # ================= 路径配置 =================

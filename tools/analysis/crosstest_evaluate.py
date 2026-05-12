@@ -86,7 +86,10 @@ def main():
     logger.info(f"Target Dataset: {config['name']}")
     logger.info(f"Model Config: feature_dim={config['model']['feature_dim']}, "
                 f"clip_num={config['model']['clip_num']}, clip_len={config['model']['clip_len']}, "
-                f"backbone={config['model']['backbone']}")
+                f"backbone={config['model']['backbone']}, "
+                f"temporal_module={config['model'].get('temporal_module', 'gated_mlp')}, "
+                f"freq_branch={config['model'].get('use_frequency_branch', False)}, "
+                f"token_dropout={config['model'].get('token_dropout', 0.0)}")
 
     # 检查索引文件是否存在
     index_path = config.get('index_path')
@@ -123,7 +126,8 @@ def main():
     )
     
     # Windows 上使用多进程时，pin_memory 可能导致共享内存问题
-    use_pin_memory = torch.cuda.is_available() and (args.num_workers == 0 or platform.system() != 'Windows')
+    # num_workers=0 时 pin_memory 没有实际收益，且可能 OOM
+    use_pin_memory = torch.cuda.is_available() and args.num_workers > 0
     
     test_loader = DataLoader(
         test_ds, 
@@ -145,6 +149,8 @@ def main():
         token_dropout=config['model'].get('token_dropout', 0.0),
         use_temporal_diff=config['model'].get('use_temporal_diff', False),
         use_frequency_branch=config['model'].get('use_frequency_branch', False),
+        frequency_fuse_block=config['model'].get('frequency_fuse_block', 2),
+        temporal_module=config['model'].get('temporal_module', 'gated_mlp'),
         num_domains=config.get('generalization', {}).get('num_domains', 0),
         grl_lambda=config.get('generalization', {}).get('grl_lambda', 1.0),
     ).to(device)
@@ -176,7 +182,7 @@ def main():
         return
 
     logger.info(f"Loading checkpoint from: {checkpoint_path}")
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
     
     # 检测 checkpoint 格式并提取 state_dict
     # .pth.tar 格式通常包含 'state_dict' 键和其他元信息
@@ -205,15 +211,22 @@ def main():
 
     # 加载参数
     missing, unexpected = model.load_state_dict(state_dict, strict=False)
+    if missing or unexpected:
+        logger.warning("="*60)
+        logger.warning("CHECKPOINT KEY MISMATCH DETECTED!")
+        logger.warning("="*60)
     if missing:
-        logger.warning(f"Missing keys in checkpoint: {len(missing)} keys")
-        if len(missing) <= 10:  # 如果缺失的键不多，打印出来
+        logger.warning(f"Missing keys in checkpoint: {len(missing)} keys (present in model but not in checkpoint)")
+        if len(missing) <= 10:
             logger.warning(f"Missing keys: {missing}")
+        logger.warning("These layers will use random initialization — results may be invalid!")
     if unexpected:
-        logger.warning(f"Unexpected keys in checkpoint: {len(unexpected)} keys")
+        logger.warning(f"Unexpected keys in checkpoint: {len(unexpected)} keys (in checkpoint but not in model)")
         if len(unexpected) <= 10:
             logger.warning(f"Unexpected keys: {unexpected}")
-    
+    if missing or unexpected:
+        logger.warning("="*60)
+
     if not missing and not unexpected:
         logger.info("Checkpoint loaded successfully with all keys matched")
     
@@ -297,13 +310,17 @@ def main():
         # 原始的单次 Forward 逻辑（保持向后兼容）
         logger.info("Starting single-forward inference...")
         with torch.no_grad():
-            for images, labels in tqdm(test_loader, desc="Evaluating"):
+            for batch in tqdm(test_loader, desc="Evaluating"):
+                if len(batch) == 3:
+                    images, labels, _ = batch
+                else:
+                    images, labels = batch
                 images = images.to(device)
-                
+
                 # Forward (Video Logits, Clip Logits)
                 # Eval 模式下，model 内部会自动调用 HRM (Stage 3)
                 video_logits, _ = model(images)
-                
+
                 all_targets.extend(labels.cpu().numpy().tolist())
                 all_logits.extend(video_logits.cpu().numpy().tolist())
 
@@ -328,6 +345,10 @@ def main():
     result_summary += f"EER: {metrics['eer']:.2f}%\n"
     result_summary += f"TPR@FPR=1%: {metrics['tpr_at_fpr_1']:.2f}%\n"
     result_summary += f"TPR@FPR=0.1%: {metrics['tpr_at_fpr_0_1']:.2f}%\n"
+    result_summary += "-" * 60 + "\n"
+    result_summary += f"Confusion Matrix:\n"
+    result_summary += f"  TN={metrics['tn']}  FP={metrics['fp']}\n"
+    result_summary += f"  FN={metrics['fn']}  TP={metrics['tp']}\n"
     result_summary += "="*60 + "\n"
     
     print(result_summary)

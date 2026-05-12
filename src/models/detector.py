@@ -5,8 +5,8 @@ import torch.nn.functional as F
 # 导入之前实现的组件
 from .backbones.mobilenet_v4 import MobileNetV4Backbone
 from .components.intra_clip import IntraClipModule
-from .components.inter_clip import InterClipModule
-from .components.reviewer import HistoricalReviewModule
+from .components.inter_clip import InterClipModule, InterClipAttention
+from .components.reviewer import HistoricalReviewModule, LearnableDecayHRM
 from src.losses.generalization import DomainClassifier
 
 class LiteCueNet(nn.Module):
@@ -32,8 +32,10 @@ class LiteCueNet(nn.Module):
         token_dropout=0.0,
         use_temporal_diff=False,
         use_frequency_branch=False,
+        frequency_fuse_block=2,
         num_domains=0,
         grl_lambda=1.0,
+        temporal_module="gated_mlp",
     ):
         """
         Args:
@@ -48,7 +50,9 @@ class LiteCueNet(nn.Module):
         self.token_dropout = float(token_dropout)
         self.use_temporal_diff = use_temporal_diff
         self.use_frequency_branch = use_frequency_branch
+        self.frequency_fuse_block = frequency_fuse_block
         self.grl_lambda = grl_lambda
+        self.temporal_module = temporal_module
         
         # ---------------------------------------------------------
         # 1. 空间骨干 (Spatial Backbone)
@@ -57,7 +61,8 @@ class LiteCueNet(nn.Module):
         self.backbone = MobileNetV4Backbone(
             model_name=backbone_name,
             out_dim=feature_dim,
-            pretrained=pretrained
+            pretrained=pretrained,
+            fuse_block_idx=frequency_fuse_block if use_frequency_branch else -1,
         )
         
         # ---------------------------------------------------------
@@ -78,40 +83,61 @@ class LiteCueNet(nn.Module):
             )
 
         if self.use_frequency_branch:
+            # 频域分支：输出特征图，在 backbone 中间层融合
+            # 输入 (N, 3, 224, 224) -> 输出 (N, 96, 14, 14)
+            # 与 backbone block_2 输出 shape 对齐后做残差融合
             self.frequency_branch = nn.Sequential(
-                nn.Conv2d(3, 16, kernel_size=3, stride=2, padding=1, bias=False),
-                nn.BatchNorm2d(16),
-                nn.SiLU(inplace=True),
-                nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1, bias=False),
+                nn.Conv2d(3, 32, kernel_size=3, stride=2, padding=1, bias=False),
                 nn.BatchNorm2d(32),
                 nn.SiLU(inplace=True),
-                nn.AdaptiveAvgPool2d(1),
-                nn.Flatten(),
-                nn.Linear(32, feature_dim),
+                nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1, bias=False),
+                nn.BatchNorm2d(64),
+                nn.SiLU(inplace=True),
+                nn.Conv2d(64, 96, kernel_size=3, stride=2, padding=1, bias=False),
+                nn.BatchNorm2d(96),
+                nn.SiLU(inplace=True),
+                nn.Conv2d(96, 96, kernel_size=3, stride=2, padding=1, bias=False),
+                nn.BatchNorm2d(96),
+                nn.SiLU(inplace=True),
             )
         
         # ---------------------------------------------------------
         # 3. Stage 2: 全局不一致性模块 (Inter-Clip)
         # ---------------------------------------------------------
         # 对应 TFCU 的 FGM 模块
-        # 捕捉 16 个片段间的逻辑冲突 (Gated-MLP)
-        self.inter_clip = InterClipModule(
-            dim=feature_dim,
-            seq_len=clip_num  # Gated-MLP 需要知道序列长度来进行全局投影
-        )
+        # 捕捉 16 个片段间的逻辑冲突
+        # 支持 "gated_mlp" (默认) 和 "attention" 两种模式
+        if temporal_module == "attention":
+            self.inter_clip = InterClipAttention(
+                dim=feature_dim,
+                seq_len=clip_num,
+            )
+        else:
+            self.inter_clip = InterClipModule(
+                dim=feature_dim,
+                seq_len=clip_num
+            )
         
         # ---------------------------------------------------------
         # 4. Stage 3: 历史回顾模块 (Historical Review)
         # ---------------------------------------------------------
         # 对应 TFCU 的 HRM 模块
-        # 仅在推理时使用 (Parameter-free)
-        self.reviewer = HistoricalReviewModule()
+        # 仅在推理时使用
+        self.reviewer = LearnableDecayHRM(seq_len=clip_num)
         
         # ---------------------------------------------------------
-        # 5. 分类头 (Classifier Head)
+        # 5. 分类头与视频级融合权重 (Classifier Head & Fusion)
         # ---------------------------------------------------------
         # 简单的线性层，将特征映射为真伪概率
         self.head = nn.Linear(feature_dim, num_classes)
+
+        # 可学习的 clip 权重网络：自动学习哪些 clip 更可信
+        # 用于视频级推理时替代简单的平均池化
+        self.clip_weight_net = nn.Sequential(
+            nn.Linear(feature_dim, 64),
+            nn.SiLU(),
+            nn.Linear(64, 1),
+        )
 
         self.domain_classifier = None
         if num_domains and num_domains > 1:
@@ -138,14 +164,15 @@ class LiteCueNet(nn.Module):
         # (B, M, K, C, H, W) -> (B*M*K, C, H, W)
         x_flat = x.view(-1, C, H, W)
         
-        # MobileNet 提取特征
-        # output: (B*M*K, D)
-        spatial_feats = self.backbone(x_flat)
-
         if self.use_frequency_branch:
+            # 像素空间高通残差
             low_freq = F.avg_pool2d(x_flat, kernel_size=5, stride=1, padding=2)
             high_freq = x_flat - low_freq
-            spatial_feats = spatial_feats + self.frequency_branch(high_freq)
+            # 频域分支提取特征图，在 backbone 中间层融合
+            freq_feats = self.frequency_branch(high_freq)
+            spatial_feats = self.backbone(x_flat, freq_feats=freq_feats)
+        else:
+            spatial_feats = self.backbone(x_flat)
         
         # =========================================================
         # Step 2: 局部微动捕捉 (Stage 1)
@@ -188,9 +215,20 @@ class LiteCueNet(nn.Module):
         clip_logits = self.head(global_feats)
         
         # 视频级预测 (Video-level Prediction)
-        # 对所有片段的 Logits 求平均 (TFCU 做法) 
-        # (B, M, 2) -> (B, 2)
-        video_logits = clip_logits.mean(dim=1)
+        # 可学习加权融合：基于 clip 特征动态计算权重
+        # 让模型自动抑制噪声 clip、放大可信 clip 的贡献
+        # (B, M, D) -> (B, M, 1) -> softmax over M
+        weights = self.clip_weight_net(global_feats)
+        weights = F.softmax(weights, dim=1)
+        # (B, M, 2) * (B, M, 1) -> (B, 2)
+        video_logits = (clip_logits * weights).sum(dim=1)
+
+        # 计算 clip 权重熵（防止退化到 one-hot）
+        # 仅在训练时有效，用于 entropy regularization
+        clip_entropy = None
+        if self.training:
+            weights_sq = weights.squeeze(-1)  # (B, M)
+            clip_entropy = -(weights_sq * torch.log(weights_sq.clamp(min=1e-8))).sum(dim=1).mean()
 
         if return_features or return_domain:
             video_features = global_feats.mean(dim=1)
@@ -198,6 +236,7 @@ class LiteCueNet(nn.Module):
                 'video_logits': video_logits,
                 'clip_logits': clip_logits,
                 'features': video_features,
+                'clip_entropy': clip_entropy,
             }
             if return_domain and self.domain_classifier is not None:
                 outputs['domain_logits'] = self.domain_classifier(video_features, self.grl_lambda)

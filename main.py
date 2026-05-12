@@ -183,6 +183,8 @@ def main():
         token_dropout=CONFIG['model'].get('token_dropout', 0.0),
         use_temporal_diff=CONFIG['model'].get('use_temporal_diff', False),
         use_frequency_branch=CONFIG['model'].get('use_frequency_branch', False),
+        frequency_fuse_block=CONFIG['model'].get('frequency_fuse_block', 2),
+        temporal_module=CONFIG['model'].get('temporal_module', 'gated_mlp'),
         num_domains=CONFIG.get('generalization', {}).get('num_domains', 0),
         grl_lambda=CONFIG.get('generalization', {}).get('grl_lambda', 1.0),
     )
@@ -206,6 +208,7 @@ def main():
         domain_adv_weight=CONFIG.get('generalization', {}).get('domain_adv_weight', 0.0),
         groupdro_weight=CONFIG.get('generalization', {}).get('groupdro_weight', 0.0),
         groupdro_eta=CONFIG.get('generalization', {}).get('groupdro_eta', 0.1),
+        entropy_weight=CONFIG['loss'].get('entropy_weight', 0.0),
     )
 
     # ==========================================

@@ -198,6 +198,11 @@ def load_model(config: Dict, checkpoint_path: str, device: torch.device) -> Lite
         clip_len=model_cfg["clip_len"],
         num_classes=model_cfg["num_classes"],
         backbone_name=model_cfg["backbone"],
+        token_dropout=model_cfg.get("token_dropout", 0.0),
+        use_temporal_diff=model_cfg.get("use_temporal_diff", False),
+        use_frequency_branch=model_cfg.get("use_frequency_branch", False),
+        frequency_fuse_block=model_cfg.get("frequency_fuse_block", 2),
+        temporal_module=model_cfg.get("temporal_module", "gated_mlp"),
     ).to(device)
 
     ckpt = load_checkpoint_safely(checkpoint_path, device=device)

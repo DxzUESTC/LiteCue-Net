@@ -186,28 +186,28 @@ def main():
     unified_save_path = os.path.join(index_dir, "FFIW10K-v1-release-test.pkl")
     with open(unified_save_path, 'wb') as f:
         pickle.dump(all_index, f)
-    print(f"\n✓ 统一索引已保存到: {unified_save_path}")
+    print(f"\n[OK] 统一索引已保存到: {unified_save_path}")
     print(f"  包含 {len(train_index)} 个train样本、 {len(val_index)} 个val样本和 {len(test_index)} 个test样本")
-    
+
     # 2. 训练集索引文件
     train_save_path = os.path.join(index_dir, "FFIW10K-v1-release-test_train.pkl")
     with open(train_save_path, 'wb') as f:
         pickle.dump(train_index, f)
-    print(f"\n✓ Train 索引已保存到: {train_save_path}")
+    print(f"\n[OK] Train 索引已保存到: {train_save_path}")
     print(f"  包含 {len(train_index)} 个样本")
-    
+
     # 3. 验证集索引文件
     val_save_path = os.path.join(index_dir, "FFIW10K-v1-release-test_val.pkl")
     with open(val_save_path, 'wb') as f:
         pickle.dump(val_index, f)
-    print(f"\n✓ Val 索引已保存到: {val_save_path}")
+    print(f"\n[OK] Val 索引已保存到: {val_save_path}")
     print(f"  包含 {len(val_index)} 个样本")
-    
+
     # 4. 测试集索引文件
     test_save_path = os.path.join(index_dir, "FFIW10K-v1-release-test_test.pkl")
     with open(test_save_path, 'wb') as f:
         pickle.dump(test_index, f)
-    print(f"\n✓ Test 索引已保存到: {test_save_path}")
+    print(f"\n[OK] Test 索引已保存到: {test_save_path}")
     print(f"  包含 {len(test_index)} 个样本")
     
     # 显示示例记录

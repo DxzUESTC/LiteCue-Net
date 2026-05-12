@@ -10,7 +10,7 @@
 
 ---
 
-### 第一步：准备目标数据集 (Data Preparation) ⚠️ **必须步骤**
+### 第一步：准备目标数据集 (Data Preparation) **必须步骤**
 
 已经下载并用 `extract_faces.py` 处理好了 **Celeb-DF-v2** 数据集，存放于 `data/clips/Celeb-DF-v2`。
 
@@ -44,7 +44,7 @@ python tools/preprocess/build_dataset_index.py `
 
 ### 第二步：创建数据集配置 (Config)
 
-在跨数据集测试中，通常**不划分**训练/验证集，而是将**整个**目标数据集作为 **测试集 (Test Set)**。
+在跨数据集测试中，默认**不划分**训练/验证集，是将**整个**目标数据集作为 **测试集 (Test Set)**。
 
 新建文件 `configs/crosstest/celebdfv2_crosstest.yaml`：
 
@@ -80,168 +80,35 @@ normalization:
 
 ---
 
-### 第三步：编写评估脚本 (Evaluation Script)
+### 第三步：运行评估脚本 (Evaluation Script)
 
-我们需要一个独立的脚本来加载 FF++ 训练好的权重，并在 Celeb-DF 上跑推理。这个脚本需要能够处理 `.pth.tar` 这种包含元数据的检查点格式。
+评估脚本 `tools/analysis/crosstest_evaluate.py` 已实现完整功能，使用单个 `--config` 参数指向跨数据集测试配置。
 
-新建文件 `tools/analysis/crosstest_evaluate.py`：
+**当前脚本特性：**
+- 支持新旧 checkpoint 格式自动检测 (`.pth` / `.pth.tar`)
+- 使用 `weights_only=True` 安全加载
+- 详细的 key mismatch 检测与警告
+- 输出完整指标：AUC / ACC / AP / EER / TPR@1%FPR / TPR@0.1%FPR / 混淆矩阵
+- 支持 batch 中可选的 video path 字段 (3 元素 tuple)
 
-```Python
-import os
-import sys
-import torch
-import yaml
-import argparse
-import logging
-from tqdm import tqdm
+**模型参数传递：**
+脚本自动从配置中读取以下新参数并传递给模型：
 
-# 将项目根目录加入路径
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
-
-from src.data.dataset import LiteCueDataset
-from src.data.transforms import get_transforms
-from src.models.detector import LiteCueNet
-from src.utils.metrics import calculate_metrics
-from torch.utils.data import DataLoader
-
-def setup_logger():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[logging.StreamHandler(sys.stdout)]
-    )
-    return logging.getLogger("CrossTestEval")
-
-def load_config(config_path):
-    """加载 YAML 配置文件，并处理数据集嵌套配置"""
-    if not os.path.exists(config_path):
-        raise FileNotFoundError(f"Config not found: {config_path}")
-    
-    with open(config_path, 'r', encoding='utf-8') as f:
-        config = yaml.safe_load(f)
-        
-    if 'dataset_config' in config:
-        dataset_yaml_path = config['dataset_config']
-        if not os.path.exists(dataset_yaml_path):
-            raise FileNotFoundError(f"Dataset config not found: {dataset_yaml_path}")
-            
-        with open(dataset_yaml_path, 'r', encoding='utf-8') as df:
-            dataset_config = yaml.safe_load(df)
-        config.update(dataset_config)
-        
-    return config
-
-def main():
-    parser = argparse.ArgumentParser(description="LiteCue-Net Cross-Dataset Evaluation")
-    parser.add_argument('--config', type=str, required=True, help='Path to model training config (e.g. configs/train.yaml)')
-    parser.add_argument('--dataset_config', type=str, required=True, help='Path to target dataset config (e.g. configs/crosstest/celebdfv2_crosstest.yaml)')
-    parser.add_argument('--checkpoint', type=str, required=True, help='Path to best_model.pth.tar')
-    parser.add_argument('--batch_size', type=int, default=32, help='Batch size for evaluation')
-    parser.add_argument('--num_workers', type=int, default=4, help='Number of data loading workers')
-    args = parser.parse_args()
-
-    logger = setup_logger()
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    logger.info(f"Using device: {device}")
-
-    # 1. 加载配置 (Model Config + Dataset Config)
-    config = load_config(args.config)
-    with open(args.dataset_config, 'r', encoding='utf-8') as f:
-        ds_config = yaml.safe_load(f)
-    
-    # 合并配置
-    config.update(ds_config)
-    logger.info(f"Evaluating on dataset: {config['name']}")
-
-    # 2. 准备数据
-    # Cross-Dataset 测试不需要数据增强，也不需要按身份划分(因为全是测试集)
-    path_patterns = ds_config.get('path_patterns', None)
-    test_ds = LiteCueDataset(
-        index_path=config['index_path'],
-        data_root=config['data_root'],
-        transforms=get_transforms(mode='val'), # 仅 Resize + Normalize
-        mode='test', # 采样模式为 test (中心采样)
-        clip_num=config['model']['clip_num'],
-        clip_len=config['model']['clip_len'],
-        path_patterns=path_patterns
-    )
-    
-    test_loader = DataLoader(
-        test_ds, 
-        batch_size=args.batch_size, 
-        shuffle=False, 
-        num_workers=args.num_workers, 
-        pin_memory=True if torch.cuda.is_available() else False
-    )
-    logger.info(f"Test set size: {len(test_ds)} videos")
-
-    # 3. 构建模型
-    model = LiteCueNet(
-        feature_dim=config['model']['feature_dim'],
-        clip_num=config['model']['clip_num'],
-        clip_len=config['model']['clip_len'],
-        num_classes=config['model']['num_classes'],
-        backbone_name=config['model']['backbone']
-    ).to(device)
-
-    # 4. 加载权重
-    if not os.path.exists(args.checkpoint):
-        logger.error(f"Checkpoint not found: {args.checkpoint}")
-        return
-
-    logger.info(f"Loading weights from: {args.checkpoint}")
-    checkpoint = torch.load(args.checkpoint, map_location=device)
-    
-    # 处理 checkpoint 字典结构 (如果是 .pth.tar 通常包含 'state_dict')
-    if 'state_dict' in checkpoint:
-        state_dict = checkpoint['state_dict']
-    else:
-        state_dict = checkpoint
-        
-    # 处理 DataParallel 前缀 'module.'
-    if len(state_dict) > 0 and list(state_dict.keys())[0].startswith('module.'):
-        state_dict = {k[7:]: v for k, v in state_dict.items()}
-
-    # 加载参数
-    missing, unexpected = model.load_state_dict(state_dict, strict=False)
-    if missing:
-        logger.warning(f"Missing keys: {missing}")
-    if unexpected:
-        logger.warning(f"Unexpected keys: {unexpected}")
-    
-    # 5. 开始推理
-    model.eval() # 开启 Evaluation 模式 (Stage 3 HRM 生效)
-    
-    all_targets = []
-    all_logits = []
-    
-    logger.info("Starting inference...")
-    with torch.no_grad():
-        for images, labels in tqdm(test_loader, desc="Evaluating"):
-            images = images.to(device)
-            
-            # Forward (Video Logits, Clip Logits)
-            # Eval 模式下，model 内部会自动调用 HRM (Stage 3)
-            video_logits, _ = model(images)
-            
-            all_targets.extend(labels.cpu().numpy().tolist())
-            all_logits.extend(video_logits.cpu().numpy().tolist())
-
-    # 6. 计算指标
-    metrics = calculate_metrics(all_targets, all_logits)
-    
-    print("\n" + "="*50)
-    print(f"Cross-Dataset Evaluation Result")
-    print("="*50)
-    print(f"Target Dataset: {config['name']}")
-    print(f"Source Model: {os.path.basename(args.checkpoint)}")
-    print("-" * 50)
-    print(f"AUC: {metrics['auc']:.2f}%")
-    print(f"Accuracy: {metrics['acc']:.2f}%")
-    print("="*50 + "\n")
-
-if __name__ == "__main__":
-    main()
+```python
+model = LiteCueNet(
+    feature_dim=config['model']['feature_dim'],
+    clip_num=config['model']['clip_num'],
+    clip_len=config['model']['clip_len'],
+    num_classes=config['model']['num_classes'],
+    backbone_name=config['model']['backbone'],
+    token_dropout=config['model'].get('token_dropout', 0.0),
+    use_temporal_diff=config['model'].get('use_temporal_diff', False),
+    use_frequency_branch=config['model'].get('use_frequency_branch', False),
+    frequency_fuse_block=config['model'].get('frequency_fuse_block', 2),
+    temporal_module=config['model'].get('temporal_module', 'gated_mlp'),
+    num_domains=config.get('generalization', {}).get('num_domains', 0),
+    grl_lambda=config.get('generalization', {}).get('grl_lambda', 1.0),
+).to(device)
 ```
 
 ---
@@ -259,19 +126,20 @@ if __name__ == "__main__":
 
 ```Bash
 python tools/analysis/crosstest_evaluate.py \
-  --config configs/train.yaml \
-  --dataset_config configs/crosstest/celebdfv2_crosstest.yaml \
-  --checkpoint checkpoints/exp_001/model_best.pth.tar \
+  --config configs/crosstest/celebdfv2_crosstest.yaml \
+  --checkpoint checkpoints/exp_001/best_model.pth \
   --batch_size 32
 ```
+
+> **注意**：当前脚本使用单个 `--config` 参数指向 crosstest 配置（而非旧版的 `--config` + `--dataset_config` 双参数）。旧版接口已废弃。
 
 **日志记录：**
 
 评估脚本会自动将日志保存到 `logs/crosstest/` 目录下，日志文件名格式为 `crosstest_{timestamp}.log`，包含：
-- 配置信息（模型参数、数据集信息）
+- 配置信息（模型参数、数据集信息、时序模块类型、频域分支等）
 - 数据加载统计（测试集大小、真实/伪造样本数量）
-- Checkpoint 加载信息
+- Checkpoint 加载信息（含 key mismatch 检测）
 - 评估进度
-- **最终评估结果**（AUC、Accuracy）
+- **最终评估结果**（AUC / ACC / AP / EER / TPR@FPR / 混淆矩阵）
 
 所有信息会同时输出到控制台和日志文件，方便后续查看和分析。
