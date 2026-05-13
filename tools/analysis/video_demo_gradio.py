@@ -249,6 +249,113 @@ def sample_frame_indices(total_frames: int, target_count: int, oversample: int =
     return np.linspace(0, total_frames - 1, count, dtype=np.int32).tolist()
 
 
+class GradCAMCapture:
+    """捕获指定卷积层的激活和梯度，用于生成 fake 类 Grad-CAM。"""
+
+    def __init__(self, target_layer: torch.nn.Module):
+        self.activations = None
+        self.gradients = None
+        self._forward_handle = target_layer.register_forward_hook(self._save_activation)
+
+    def _save_activation(self, _module, _inputs, output):
+        self.activations = output
+        if isinstance(output, torch.Tensor) and output.requires_grad:
+            output.register_hook(self._save_gradient)
+
+    def _save_gradient(self, gradient):
+        self.gradients = gradient
+
+    def close(self):
+        self._forward_handle.remove()
+
+
+def get_gradcam_target_layer(model: LiteCueNet) -> torch.nn.Module:
+    return model.backbone.backbone.blocks[-1]
+
+
+def build_gradcam_maps(activations: torch.Tensor, gradients: torch.Tensor) -> np.ndarray:
+    weights = gradients.mean(dim=(2, 3), keepdim=True)
+    cams = torch.relu((weights * activations).sum(dim=1))
+    cams_np = cams.detach().cpu().numpy()
+    flat = cams_np.reshape(cams_np.shape[0], -1)
+    mins = flat.min(axis=1).reshape(-1, 1, 1)
+    maxs = flat.max(axis=1).reshape(-1, 1, 1)
+    return (cams_np - mins) / np.maximum(maxs - mins, 1e-6)
+
+
+def overlay_heatmap_on_face(frame_bgr: np.ndarray, face_box: Tuple[int, int, int, int], cam: np.ndarray) -> np.ndarray:
+    x1, y1, x2, y2 = face_box
+    vis = frame_bgr.copy()
+    face_w, face_h = x2 - x1, y2 - y1
+    if face_w <= 0 or face_h <= 0:
+        return vis
+
+    cam_resized = cv2.resize(cam, (face_w, face_h), interpolation=cv2.INTER_LINEAR)
+    heatmap = np.uint8(255 * cam_resized)
+    heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+    blended = cv2.addWeighted(vis[y1:y2, x1:x2], 0.55, heatmap, 0.45, 0)
+    vis[y1:y2, x1:x2] = blended
+    cv2.rectangle(vis, (x1, y1), (x2, y2), (30, 30, 255), 2)
+    return vis
+
+
+def save_keyframe_heatmaps(
+    video_path: str,
+    sampled: List[Dict],
+    cam_maps: np.ndarray,
+    clip_fake_probs: np.ndarray,
+    clip_num: int,
+    clip_len: int,
+    output_dir: str,
+    max_keyframes: int = 6,
+) -> List[str]:
+    keyframe_paths = []
+    ranked_clips = np.argsort(-clip_fake_probs)[: min(max_keyframes, clip_num)]
+    cap = cv2.VideoCapture(video_path)
+    video_name = os.path.splitext(os.path.basename(video_path))[0]
+
+    try:
+        for rank, clip_idx in enumerate(ranked_clips, start=1):
+            start = int(clip_idx) * clip_len
+            end = min(start + clip_len, len(sampled), len(cam_maps))
+            if start >= end:
+                continue
+
+            clip_cam_scores = cam_maps[start:end].reshape(end - start, -1).mean(axis=1)
+            frame_offset = int(np.argmax(clip_cam_scores))
+            sample_idx = start + frame_offset
+            sample = sampled[sample_idx]
+
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(sample["frame_idx"]))
+            ok, frame = cap.read()
+            if not ok:
+                continue
+
+            vis = overlay_heatmap_on_face(frame, sample["face_box"], cam_maps[sample_idx])
+            cv2.putText(
+                vis,
+                f"Keyframe {rank} | Clip:{int(clip_idx)} Fake:{clip_fake_probs[int(clip_idx)]:.3f}",
+                (16, 32),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (30, 30, 255),
+                2,
+            )
+
+            out_path = os.path.abspath(
+                os.path.join(
+                    output_dir,
+                    f"{video_name}_heatmap_rank{rank}_frame{int(sample['frame_idx'])}.jpg",
+                )
+            )
+            cv2.imwrite(out_path, vis)
+            keyframe_paths.append(out_path)
+    finally:
+        cap.release()
+
+    return keyframe_paths
+
+
 def ensure_web_playable_video(src_path: str) -> str:
     """
     尝试转码为浏览器通用的 H264/yuv420p。
@@ -290,7 +397,8 @@ def infer_and_localize(
     clip_len: int,
     device: torch.device,
     fake_threshold: float = 0.5,
-) -> Tuple[Dict, str]:
+    max_keyframes: int = 6,
+) -> Tuple[Dict, str, List[str]]:
     required_frames = clip_num * clip_len
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -344,16 +452,40 @@ def infer_and_localize(
     input_tensor = input_tensor.view(clip_num, clip_len, *input_tensor.shape[1:])
     input_tensor = input_tensor.unsqueeze(0).to(device)
 
-    with torch.no_grad():
-        video_logits, _ = model(input_tensor)
-        probs = torch.softmax(video_logits, dim=1)[0].cpu().numpy().tolist()
+    gradcam = GradCAMCapture(get_gradcam_target_layer(model))
+    try:
+        model.zero_grad(set_to_none=True)
+        video_logits, clip_logits = model(input_tensor)
+        probs = torch.softmax(video_logits, dim=1)[0].detach().cpu().numpy().tolist()
+        clip_fake_probs = torch.softmax(clip_logits, dim=2)[0, :, 1].detach().cpu().numpy()
+        video_logits[:, 1].sum().backward()
+        if gradcam.activations is None or gradcam.gradients is None:
+            raise RuntimeError("Grad-CAM 捕获失败：未获得目标层激活或梯度。")
+        cam_maps = build_gradcam_maps(gradcam.activations, gradcam.gradients)
+    finally:
+        gradcam.close()
+        model.zero_grad(set_to_none=True)
 
     real_prob, fake_prob = float(probs[0]), float(probs[1])
     pred_label = 1 if fake_prob >= fake_threshold else 0
 
     os.makedirs("runs/demo_outputs", exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = os.path.abspath(os.path.join("runs/demo_outputs", f"demo_{stamp}.mp4"))
+    output_dir = os.path.abspath(os.path.join("runs/demo_outputs", f"demo_{stamp}"))
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.abspath(os.path.join(output_dir, f"demo_{stamp}.mp4"))
+    keyframe_paths = []
+    if pred_label == 1:
+        keyframe_paths = save_keyframe_heatmaps(
+            video_path=video_path,
+            sampled=sampled,
+            cam_maps=cam_maps,
+            clip_fake_probs=clip_fake_probs,
+            clip_num=clip_num,
+            clip_len=clip_len,
+            output_dir=output_dir,
+            max_keyframes=max_keyframes,
+        )
 
     reader = cv2.VideoCapture(video_path)
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
@@ -398,8 +530,9 @@ def infer_and_localize(
         "sampled_frames_used": len(sampled),
         "total_frames": total_frames,
         "localized_frames": boxed_frames,
+        "heatmap_keyframes": len(keyframe_paths),
     }
-    return result, playable_output_path
+    return result, playable_output_path, keyframe_paths
 
 
 def infer_and_localize_image(
@@ -577,7 +710,7 @@ def build_demo(config_path: str, checkpoint_path: str, host: str, port: int):
         video_path = normalize_video_input(video_file)
         if not video_path:
             raise gr.Error("请先拖入或上传一个视频文件。")
-        result, out_path = infer_and_localize(
+        result, out_path, keyframe_paths = infer_and_localize(
             video_path=video_path,
             model=model,
             detector=detector,
@@ -591,9 +724,10 @@ def build_demo(config_path: str, checkpoint_path: str, host: str, port: int):
             f"判定结果: {result['prediction'].upper()}\n"
             f"真实概率: {result['probability']['real']:.4f}\n"
             f"伪造概率: {result['probability']['fake']:.4f}\n"
-            f"定位帧数: {result['localized_frames']}"
+            f"定位帧数: {result['localized_frames']}\n"
+            f"热力图关键帧: {result['heatmap_keyframes']}"
         )
-        return text, out_path, out_path
+        return text, out_path, out_path, keyframe_paths
 
     def run_image_demo(image_file, fake_threshold: float, image_model_name: str):
         image_path = normalize_image_input(image_file)
@@ -635,9 +769,10 @@ def build_demo(config_path: str, checkpoint_path: str, host: str, port: int):
             gr.Textbox(label="推理结果"),
             gr.Video(show_label=False, height=420),
             gr.File(label="输出视频下载（播放器不兼容时请下载）"),
+            gr.Gallery(label="伪造关键帧热力图", columns=3, height=420),
         ],
         title="视频鉴伪",
-        description="拖入视频后，基于当前训练权重输出真假判断与概率；若判定为伪造，将在可疑区域绘制方框。",
+        description="拖入视频后输出真假判断与概率；若判定为伪造，将生成 Grad-CAM 关键帧热力图用于提示模型关注区域。",
         flagging_mode="never",
     )
 
