@@ -21,3 +21,8 @@ fastapi==0.136.0
 uvicorn==0.46.0
 python-multipart==0.0.26
 pydantic==2.12.4
+
+# Face detection (insightface / RetinaFace)
+insightface==0.7.3
+# ONNX Runtime (CUDA): pip install onnxruntime-gpu (match your CUDA version)
+# The onnx CPU package is auto-installed by insightface as a dependency.

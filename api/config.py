@@ -11,9 +11,12 @@ class Settings:
         "CHECKPOINT_PATH",
         str(BASE_DIR / "checkpoints" / "exp_20260511" / "best_model.pth"),
     )
+    # Note: insightface.app.FaceAnalysis(name="buffalo_l", root=X) internally
+    # resolves to X/models/buffalo_l, so INSIGHTFACE_ROOT must point to the
+    # parent of models/ (the project root), not models/ itself.
     INSIGHTFACE_ROOT = os.getenv(
         "INSIGHTFACE_ROOT",
-        os.path.expanduser("~/.insightface/models"),
+        str(BASE_DIR),
     )
 
     # --- LiteCueNet architecture (must match checkpoint) ---
