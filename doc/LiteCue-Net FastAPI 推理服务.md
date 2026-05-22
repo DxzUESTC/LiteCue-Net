@@ -51,6 +51,12 @@ api/
 ├── engine.py            # 推理引擎：模型加载/前向/Grad-CAM
 └── main.py              # FastAPI 应用：路由、生命周期、CORS
 
+models/
+└── buffalo_l/           # 离线下载的 InsightFace ONNX 模型文件（5 个）
+
+scripts/
+└── download_models.py   # 离线下载脚本
+
 doc/
 └── LiteCue-Net FastAPI 推理服务.md   # 本文档
 ```
@@ -76,20 +82,26 @@ doc/
 
 - LiteCue conda 环境已激活（或等效虚拟环境）
 - 权重文件位于 `checkpoints/exp_20260511/best_model.pth`
-- InsightFace 模型首次使用时自动下载到 `~/.insightface/models/buffalo_l/`
+- InsightFace 模型已下载到本地 `models/buffalo_l/`
 
-### 启动命令
+### 一键启动
 
 ```bash
-# 从项目根目录启动
-cd d:\01_Lab\Project\LiteCue-Net
+# 0. 安装依赖（首次）
+pip install -r requirements-api.txt
 
-# 方式一：直接运行
+# 1. 下载 InsightFace 模型到本地 models/ 目录（首次，需联网）
+python scripts/download_models.py
+
+# 2. 从项目根目录启动服务
 python api/main.py
 
-# 方式二：uvicorn（推荐，支持热重载）
+# 或使用 uvicorn（推荐，支持热重载）
 uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 ```
+
+> 模型下载完成后即离线可用。后续启动无需联网，`models/buffalo_l/` 目录包含 5 个 ONNX 文件：
+> `det_10g.onnx`、`w600k_r50.onnx`、`1k3d68.onnx`、`2d106det.onnx`、`genderage.onnx`
 
 ### 验证服务
 
@@ -321,7 +333,7 @@ Top-6 clips 筛选:
 | 环境变量 | 默认值 | 说明 |
 |----------|--------|------|
 | `CHECKPOINT_PATH` | `checkpoints/exp_20260511/best_model.pth` | 权重文件路径 |
-| `INSIGHTFACE_ROOT` | `~/.insightface/models` | InsightFace 模型目录 |
+| `INSIGHTFACE_ROOT` | 项目根目录 | InsightFace 模型搜索路径（内部自动拼接 `/models/buffalo_l`） |
 | `API_HOST` | `0.0.0.0` | 监听地址 |
 | `API_PORT` | `8000` | 监听端口 |
 | `DEVICE` | `cuda` | 推理设备 (`cuda` / `cpu`) |
@@ -336,7 +348,16 @@ Top-6 clips 筛选:
 
 ### 人脸检测模型下载失败
 
-InsightFace `buffalo_l` 模型在首次使用时自动下载。如网络受限，可手动下载模型文件放置到 `~/.insightface/models/buffalo_l/` 目录。
+运行 `python scripts/download_models.py` 可将 InsightFace `buffalo_l` 模型下载到项目本地的 `models/buffalo_l/` 目录。如网络受限，可手动从 [GitHub Release](https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip) 下载 ZIP，解压后放入 `models/buffalo_l/` 即可。
+
+模型文件完整列表（5 个 ONNX 文件）：
+- `det_10g.onnx` — 人脸检测
+- `w600k_r50.onnx` — 面部识别
+- `1k3d68.onnx` — 3D 关键点
+- `2d106det.onnx` — 2D 关键点
+- `genderage.onnx` — 性别年龄
+
+> 注意：服务启动时不再自动下载。确保 `models/buffalo_l/` 目录存在且文件齐全。
 
 ### 推理速度慢
 
