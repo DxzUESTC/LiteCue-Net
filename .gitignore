@@ -45,9 +45,12 @@ Thumbs.db
 .claude/
 
 # ============================================
-# Local model files (downloaded by scripts/download_models.py)
+# Local model files（API 推理所需的 buffalo_l 已纳入版本库）
 # ============================================
-models/
+models/*
+!models/buffalo_l/
+!models/buffalo_l/*.onnx
+!models/README.md
 
 # ============================================
 # Environment & Secrets

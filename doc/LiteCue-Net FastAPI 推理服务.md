@@ -52,10 +52,14 @@ api/
 └── main.py              # FastAPI 应用：路由、生命周期、CORS
 
 models/
-└── buffalo_l/           # 离线下载的 InsightFace ONNX 模型文件（5 个）
+└── buffalo_l/           # InsightFace ONNX（随仓库 / Git LFS 同步，5 个文件）
+
+checkpoints/
+└── exp_20260511/
+    └── best_model.pth   # LiteCue-Net 权重（随仓库同步）
 
 scripts/
-└── download_models.py   # 离线下载脚本
+└── download_models.py   # 备用：仅当 LFS 未拉取或文件缺失时使用
 
 doc/
 └── LiteCue-Net FastAPI 推理服务.md   # 本文档
@@ -80,18 +84,19 @@ doc/
 
 ### 前提
 
-- LiteCue conda 环境已激活（或等效虚拟环境）
-- 权重文件位于 `checkpoints/exp_20260511/best_model.pth`
-- InsightFace 模型已下载到本地 `models/buffalo_l/`
+- Python 虚拟环境（或 conda）已创建
+- 已克隆本仓库，并拉取 **Git LFS** 大文件（见下方）
+- 权重与 InsightFace 模型已随仓库提供，**无需**再配置 C 盘路径或 `~/.insightface`
 
 ### 一键启动
 
 ```bash
-# 0. 安装依赖（首次）
-pip install -r requirements-api.txt
+# 0. 克隆并拉取 LFS 资源（首次）
+git lfs install
+git lfs pull
 
-# 1. 下载 InsightFace 模型到本地 models/ 目录（首次，需联网）
-python scripts/download_models.py
+# 1. 安装依赖（首次；PyTorch CUDA 版需按 requirements-api.txt 注释自行安装）
+pip install -r requirements-api.txt
 
 # 2. 从项目根目录启动服务
 python api/main.py
@@ -100,8 +105,11 @@ python api/main.py
 uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-> 模型下载完成后即离线可用。后续启动无需联网，`models/buffalo_l/` 目录包含 5 个 ONNX 文件：
-> `det_10g.onnx`、`w600k_r50.onnx`、`1k3d68.onnx`、`2d106det.onnx`、`genderage.onnx`
+> 所有推理资源均在仓库内：
+> - `checkpoints/exp_20260511/best_model.pth` — LiteCue-Net
+> - `models/buffalo_l/*.onnx` — InsightFace buffalo_l（5 个 ONNX，其中 2 个经 Git LFS 存储）
+>
+> 默认从项目根目录加载，**不必**设置 `INSIGHTFACE_ROOT` 指向 C 盘或用户目录。
 
 ### 验证服务
 
@@ -346,18 +354,26 @@ Top-6 clips 筛选:
 
 确保在项目根目录执行启动命令，API 会自动将项目根目录加入 `sys.path`。
 
-### 人脸检测模型下载失败
+### 启动报 InsightFace 模型缺失或只有几 KB
 
-运行 `python scripts/download_models.py` 可将 InsightFace `buffalo_l` 模型下载到项目本地的 `models/buffalo_l/` 目录。如网络受限，可手动从 [GitHub Release](https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip) 下载 ZIP，解压后放入 `models/buffalo_l/` 即可。
+说明 Git LFS 大文件未拉取。在项目根目录执行：
 
-模型文件完整列表（5 个 ONNX 文件）：
-- `det_10g.onnx` — 人脸检测
-- `w600k_r50.onnx` — 面部识别
-- `1k3d68.onnx` — 3D 关键点
-- `2d106det.onnx` — 2D 关键点
-- `genderage.onnx` — 性别年龄
+```bash
+git lfs install
+git lfs pull
+```
 
-> 注意：服务启动时不再自动下载。确保 `models/buffalo_l/` 目录存在且文件齐全。
+若仍失败，可备用：`python scripts/download_models.py`，或从 [buffalo_l.zip](https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip) 手动解压到 `models/buffalo_l/`。
+
+### 仍想使用 C 盘 / 用户目录下的 InsightFace
+
+设置环境变量覆盖即可，例如：
+
+```bash
+set INSIGHTFACE_ROOT=C:\Users\你的用户名\.insightface
+```
+
+（需保证该路径下存在 `models/buffalo_l/` 五个 ONNX 文件。默认不设置时始终使用项目内 `models/buffalo_l/`。）
 
 ### 推理速度慢
 

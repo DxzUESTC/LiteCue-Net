@@ -1,11 +1,10 @@
-"""Download insightface models to the project-local models/ directory.
+"""Download insightface buffalo_l into models/buffalo_l/ (fallback only).
 
-Usage:
-    python scripts/download_models.py
+The API normally uses models/buffalo_l/ bundled in this repo (Git LFS).
+Run this script only when LFS was not pulled or files are missing:
 
-This downloads the buffalo_l face-detection model from the official
-insightface GitHub release and extracts it into models/buffalo_l/,
-so the API server can load it without an online download at startup.
+    git lfs install && git lfs pull   # preferred
+    python scripts/download_models.py # fallback, needs network
 """
 
 import argparse

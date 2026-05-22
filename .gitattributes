@@ -1,0 +1,2 @@
+# InsightFace buffalo_l ONNX（>100MB 的文件需 LFS，否则无法推送到 GitHub）
+models/buffalo_l/*.onnx filter=lfs diff=lfs merge=lfs -text

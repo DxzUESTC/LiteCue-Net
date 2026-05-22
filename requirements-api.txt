@@ -1,7 +1,16 @@
 # LiteCue-Net FastAPI 推理服务依赖
-# 安装：pip install -r requirements-api.txt
+#
+# 快速开始（模型与权重已随仓库提供，无需额外下载）：
+#   git lfs install && git lfs pull
+#   pip install -r requirements-api.txt
+#   python api/main.py
+#
 # PyTorch（需自行安装 CUDA 版）
 #   pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
+#
+# 推理资源路径（默认，一般无需改）：
+#   checkpoints/exp_20260511/best_model.pth
+#   models/buffalo_l/*.onnx
 torch==2.5.1
 torchvision==0.20.1
 

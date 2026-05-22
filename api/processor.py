@@ -8,7 +8,7 @@ import insightface
 import numpy as np
 from insightface.utils import face_align
 
-from api.config import settings
+from api.config import settings, verify_api_assets
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +20,7 @@ class FaceProcessor:
     """Detect, align, and crop faces from video frames, then build the (1, M, K, 3, H, W) input tensor."""
 
     def __init__(self):
+        verify_api_assets()
         providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
         self.app = insightface.app.FaceAnalysis(
             name="buffalo_l",
