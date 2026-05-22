@@ -33,12 +33,7 @@
                              │  tensor (1, 16, 4, 3, 224, 224)
                     ┌────────▼─────────┐
                     │  InferenceEngine  │  LiteCueNet 加载权重
-                    │  前向推理         │  输出真/假概率
-                    └────────┬─────────┘
-                             │
-                    ┌────────▼─────────┐
-                    │ 判真？直接返回    │
-                    │ 判假？Grad-CAM    │  backbone.blocks[-1] 钩子
+                    │  Grad-CAM 前向+反向│  一次前向同时得到分数和热力图
                     └────────┬─────────┘
                              │  JSON 响应 + base64 热力图
                              ▼
@@ -172,7 +167,7 @@ curl http://localhost:8000/api/v1/health
 | `video_info.duration_sec` | float | 视频时长（秒） |
 | `video_info.faces_detected` | int | 成功检测到人脸的帧数 |
 | `video_info.total_sampled` | int | 实际采样的帧数（始终=64） |
-| `heatmap_frames` | array | 仅 `is_fake=true` 时返回，Top-6 关键帧热力图 |
+| `heatmap_frames` | array | Top-6 关键帧热力图（始终返回，判真时也展示模型关注的区域） |
 | `heatmap_frames[].frame_index` | int | 帧在采样序列中的索引 (0~63) |
 | `heatmap_frames[].clip_index` | int | 所属 clip 索引 (0~15) |
 | `heatmap_frames[].clip_fake_probability` | float | 该 clip 的伪造概率 |
@@ -282,7 +277,7 @@ is_fake = fake_prob > real_prob
 
 ### 原理
 
-仅在视频被判为伪造时执行，避免对真实视频的无效计算。
+无论鉴定结果为真或假，始终执行 Grad-CAM，为前端提供模型决策的空间关注点。
 
 ```
 步骤:
@@ -308,7 +303,7 @@ Top-6 clips 筛选:
        - 取均值最高的帧作为关键帧
   4. CAM resize 到 224×224 → JET 伪彩 → JPEG → base64
 
-输出: 最多 6 帧热力图（判为真实时返回 null）
+输出: 最多 6 帧热力图（无论真假始终返回）
 ```
 
 ### 代码位置

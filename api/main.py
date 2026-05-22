@@ -114,7 +114,7 @@ class DetectResponse(BaseModel):
     real_probability: float
     processing_time_ms: float
     video_info: VideoInfo
-    heatmap_frames: Optional[List[HeatmapFrame]] = None
+    heatmap_frames: List[HeatmapFrame] = []
 
 
 class HealthResponse(BaseModel):
@@ -169,7 +169,7 @@ async def detect(file: UploadFile = File(...)):
             real_probability=result["real_probability"],
             processing_time_ms=elapsed_ms,
             video_info=VideoInfo(**meta),
-            heatmap_frames=result.get("heatmap_frames"),
+            heatmap_frames=result["heatmap_frames"],
         )
 
     except RuntimeError as exc:

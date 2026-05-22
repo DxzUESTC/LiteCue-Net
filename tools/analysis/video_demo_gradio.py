@@ -808,7 +808,7 @@ def build_demo(config_path: str, checkpoint_path: str, host: str, port: int):
 def parse_args():
     parser = argparse.ArgumentParser(description="LiteCue-Net Gradio Demo")
     parser.add_argument("--config", type=str, default="configs/train.yaml", help="训练配置路径")
-    parser.add_argument("--checkpoint", type=str, default="checkpoints/exp_20260305", help="权重文件或权重目录")
+    parser.add_argument("--checkpoint", type=str, default="checkpoints/exp_20260511/best_model.pth", help="权重文件或权重目录")
     parser.add_argument("--host", type=str, default="127.0.0.1", help="Gradio 监听地址")
     parser.add_argument("--port", type=int, default=7860, help="Gradio 端口")
     return parser.parse_args()

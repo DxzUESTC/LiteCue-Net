@@ -48,12 +48,13 @@ class GradCAM:
 
     def generate(
         self, video_tensor: torch.Tensor
-    ) -> Tuple[np.ndarray, torch.Tensor]:
+    ) -> Tuple[np.ndarray, torch.Tensor, torch.Tensor]:
         """Forward + backward from the fake class, return per-frame CAM maps.
 
         Returns:
             cam_maps: (M*K, H, W) float32 in [0, 1].
             clip_logits: (B, M, 2).
+            video_logits: (B, 2).
         """
         self.model.zero_grad(set_to_none=True)
 
@@ -80,7 +81,7 @@ class GradCAM:
         cmax = flat.max(dim=1, keepdim=True).values
         cams_norm = ((flat - cmin) / (cmax - cmin + 1e-8)).view(N, H, W)
 
-        return cams_norm.detach().cpu().numpy(), clip_logits
+        return cams_norm.detach().cpu().numpy(), clip_logits, video_logits
 
     def remove_hooks(self):
         if self._fwd_handle is not None:
@@ -161,50 +162,32 @@ class InferenceEngine:
             "is_fake": fake_prob > real_prob,
             "fake_probability": fake_prob,
             "real_probability": real_prob,
+            "heatmap_frames": [],
         }
 
     def predict_with_heatmap(
         self,
         video_tensor: np.ndarray,
     ) -> Dict:
-        """Run inference; if fake, also generate Grad-CAM keyframe heatmaps."""
-        # --- First forward (no_grad) for fast prediction ---
-        with torch.no_grad():
-            inp = torch.from_numpy(video_tensor).to(self.device)
-            outputs = self.model(inp)
-            if isinstance(outputs, dict):
-                video_logits = outputs["video_logits"]
-                clip_logits = outputs.get("clip_logits")
-            else:
-                video_logits, clip_logits = outputs
-
-            probs = F.softmax(video_logits, dim=1)
-            fake_prob = float(probs[0, 1].item())
-            real_prob = float(probs[0, 0].item())
-
-        is_fake = fake_prob > real_prob
-        result: Dict = {
-            "is_fake": is_fake,
-            "fake_probability": fake_prob,
-            "real_probability": real_prob,
-        }
-
-        if not is_fake:
-            return result
-
-        # --- Second forward (with grad) for Grad-CAM ---
+        """Run inference and generate Grad-CAM keyframe heatmaps for every result."""
+        # --- Second forward (with grad) for Grad-CAM + prediction ---
         try:
             inp = torch.from_numpy(video_tensor).to(self.device)
             inp.requires_grad = True
-            cam_maps, clip_logits = self.gradcam.generate(inp)
+            cam_maps, clip_logits, video_logits = self.gradcam.generate(inp)
         except RuntimeError as exc:
-            logger.warning("Grad-CAM generation failed: %s", exc)
-            return result
+            logger.warning("Grad-CAM generation failed, falling back to no-grad predict: %s", exc)
+            return self.predict(video_tensor)
+
+        # Video-level prediction from model (weighted clip fusion)
+        video_probs = F.softmax(video_logits, dim=1)
+        fake_prob = float(video_probs[0, 1].item())
+        real_prob = float(video_probs[0, 0].item())
+        is_fake = fake_prob > real_prob
 
         M = settings.CLIP_NUM
         K = settings.CLIP_LEN
-        # clip_logits: (1, M, 2) -> (M,)
-        clip_fake = F.softmax(clip_logits, dim=2)[0, :, 1].detach().cpu().numpy()
+        clip_fake = F.softmax(clip_logits, dim=2)[0, :, 1].detach().cpu().numpy()  # (M,)
         # cam_maps: (M*K, H, W) -> (M, K, H, W)
         cam_maps = cam_maps.reshape(M, K, *cam_maps.shape[1:])
 
@@ -229,8 +212,12 @@ class InferenceEngine:
                 }
             )
 
-        result["heatmap_frames"] = frames
-        return result
+        return {
+            "is_fake": is_fake,
+            "fake_probability": fake_prob,
+            "real_probability": real_prob,
+            "heatmap_frames": frames,
+        }
 
 
 # ---------------------------------------------------------------------------
