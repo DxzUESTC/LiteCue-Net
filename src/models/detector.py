@@ -34,7 +34,7 @@ class LiteCueNet(nn.Module):
         frequency_fuse_block=2,
         num_domains=0,
         grl_lambda=1.0,
-        temporal_module="gated_mlp",
+        temporal_module="attention",
     ):
         """
         Args:

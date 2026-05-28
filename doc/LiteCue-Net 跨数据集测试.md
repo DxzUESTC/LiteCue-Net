@@ -82,17 +82,24 @@ normalization:
 
 ### 第三步：运行评估脚本 (Evaluation Script)
 
-评估脚本 `tools/analysis/crosstest_evaluate.py` 已实现完整功能，使用单个 `--config` 参数指向跨数据集测试配置。
+评估脚本 `tools/analysis/crosstest_evaluate.py` 已实现完整功能，使用三个主要参数：
 
 **当前脚本特性：**
 - 支持新旧 checkpoint 格式自动检测 (`.pth` / `.pth.tar`)
 - 使用 `weights_only=True` 安全加载
 - 详细的 key mismatch 检测与警告
 - 输出完整指标：AUC / ACC / AP / EER / TPR@1%FPR / TPR@0.1%FPR / 混淆矩阵
-- 支持 batch 中可选的 video path 字段 (3 元素 tuple)
+- 支持 multi-forward 多次评估取平均（`--num_forward` 参数）
+- 导出详细预测 CSV + Top-K 失败案例 CSV
+- 自动合并训练配置与数据集配置
 
-**模型参数传递：**
-脚本自动从配置中读取以下新参数并传递给模型：
+**模型参数与配置：**
+
+脚本需要**两个配置文件**：
+1. **训练配置**（`--config`）：如 `configs/train.yaml`，包含模型架构参数（feature_dim、clip_num、backbone 等）
+2. **数据集配置**（`--dataset_config`）：如 `configs/crosstest/celebdfv2_crosstest.yaml`，包含目标数据集路径与过滤规则
+
+模型参数从训练配置的 `model:` 字段自动读取：
 
 ```python
 model = LiteCueNet(
@@ -105,7 +112,7 @@ model = LiteCueNet(
     use_temporal_diff=config['model'].get('use_temporal_diff', False),
     use_frequency_branch=config['model'].get('use_frequency_branch', False),
     frequency_fuse_block=config['model'].get('frequency_fuse_block', 2),
-    temporal_module=config['model'].get('temporal_module', 'gated_mlp'),
+    temporal_module=config['model'].get('temporal_module', 'attention'),
     num_domains=config.get('generalization', {}).get('num_domains', 0),
     grl_lambda=config.get('generalization', {}).get('grl_lambda', 1.0),
 ).to(device)
@@ -126,12 +133,23 @@ model = LiteCueNet(
 
 ```Bash
 python tools/analysis/crosstest_evaluate.py \
-  --config configs/crosstest/celebdfv2_crosstest.yaml \
-  --checkpoint checkpoints/exp_001/best_model.pth \
+  --config configs/train.yaml \
+  --dataset_config configs/crosstest/celebdfv2_crosstest.yaml \
+  --checkpoint checkpoints/exp_20260511/best_model.pth \
   --batch_size 32
 ```
 
-> **注意**：当前脚本使用单个 `--config` 参数指向 crosstest 配置（而非旧版的 `--config` + `--dataset_config` 双参数）。旧版接口已废弃。
+**参数说明：**
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `--config` | 必填 | 训练配置文件路径（如 `configs/train.yaml`），读取模型架构参数 |
+| `--dataset_config` | 必填 | 目标数据集配置文件（如 `configs/crosstest/celebdfv2_crosstest.yaml`） |
+| `--checkpoint` | 必填 | 权重文件路径（支持 `.pth` 或 `.pth.tar`） |
+| `--batch_size` | 可选，默认 32 | 评估批次大小 |
+| `--num_workers` | 可选 | 数据加载线程数（Windows 默认 0，Linux 默认 4） |
+| `--num_forward` | 可选，默认 1 | 每个视频的评估次数（>1 时多次采样取平均，提高稳定性） |
+| `--output_dir` | 可选 | 评估结果输出目录（含 JSON + CSV + Top-K 失败案例） |
 
 **日志记录：**
 
@@ -142,4 +160,4 @@ python tools/analysis/crosstest_evaluate.py \
 - 评估进度
 - **最终评估结果**（AUC / ACC / AP / EER / TPR@FPR / 混淆矩阵）
 
-所有信息会同时输出到控制台和日志文件，方便后续查看和分析。
+同时会输出 JSON 结构化指标文件 + CSV 详细预测结果 + Top-K 误判案例，方便后续分析。

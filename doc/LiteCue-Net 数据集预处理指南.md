@@ -433,11 +433,10 @@ with open('merged_index.pkl', 'wb') as f:
 
 ## 相关文档
 
-- [LiteCue-Net 项目整体框架](./LiteCue-Net%20项目整体框架.md)
+- [使用指南](./使用指南.md)
 - [LiteCue-Net 跨数据集测试](./LiteCue-Net%20跨数据集测试.md)
-- [LiteCue-Net 使用 Gated-MLP 时序建模的思路](./LiteCue-Net%20使用%20Gated-MLP%20时序建模的思路.md)
 
 ---
 
-**最后更新**: 2024-12-02
+**最后更新**: 2026-05-28
 
