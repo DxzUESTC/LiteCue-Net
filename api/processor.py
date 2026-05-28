@@ -108,14 +108,17 @@ def _extract_faces(
     """
     faces: List[np.ndarray] = []
     face_ok: List[bool] = []
+    prev_idx = -1
 
     for idx in indices:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, int(idx))
+        if idx != prev_idx + 1:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(idx))
         ret, frame = cap.read()
         if not ret:
             _pad_last(faces, face_ok)
             continue
 
+        prev_idx = idx
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = detector.detect(rgb)
         face = pick_largest_face(results)

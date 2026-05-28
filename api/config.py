@@ -5,7 +5,27 @@ by the backend at load time (see api/backends/litecuenet.py).
 """
 
 import os
+import sys
 from pathlib import Path
+
+# ONNX Runtime GPU (onnxruntime-gpu) needs cuDNN 9 DLLs at load time.
+# PyTorch bundles cuDNN 9 in its own lib directory, so we expose it via PATH
+# so that RetinaFace (ONNX) can also use GPU acceleration.
+_torch_cudnn = os.path.join(sys.prefix, "Lib", "site-packages", "torch", "lib")
+if os.path.isdir(_torch_cudnn) and os.path.isfile(os.path.join(_torch_cudnn, "cudnn64_9.dll")):
+    os.environ["PATH"] = _torch_cudnn + os.pathsep + os.environ.get("PATH", "")
+    _found = True
+else:
+    _found = False
+del _torch_cudnn
+
+import logging
+logging.getLogger("api.config").info(
+    "PyTorch cuDNN 9 %s, added to PATH: %s",
+    "found" if _found else "not found",
+    _found,
+)
+del _found
 
 
 class Settings:
