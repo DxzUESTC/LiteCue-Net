@@ -3,18 +3,19 @@
 Endpoints
 ---------
 GET  /api/v1/health  –  health check
-POST /api/v1/detect  –  upload a face video, get deepfake score (+ Grad-CAM if fake)
+POST /api/v1/detect  –  upload a face video, get deepfake score + Grad-CAM heatmaps
 """
 
 import logging
 import os
 import sys
+import tempfile
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
-# Ensure project root is on sys.path so that `from src.models.detector import …` works.
+# Ensure api/ is importable as a package when running as "python api/main.py"
 _proj_root = Path(__file__).resolve().parent.parent
 if str(_proj_root) not in sys.path:
     sys.path.insert(0, str(_proj_root))
@@ -35,7 +36,7 @@ logger = logging.getLogger("api")
 # Global resources (initialised on startup)
 # ---------------------------------------------------------------------------
 _face_processor = None
-_inference_engine = None
+_model_backend = None
 
 
 def _lazy_face():
@@ -44,29 +45,35 @@ def _lazy_face():
     return _face_processor
 
 
-def _lazy_engine():
-    if _inference_engine is None:
-        raise RuntimeError("Inference engine not initialised.")
-    return _inference_engine
+def _lazy_backend():
+    if _model_backend is None:
+        raise RuntimeError("Model backend not initialised.")
+    return _model_backend
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _face_processor, _inference_engine
-    logger.info("Starting up — loading face processor & inference engine ...")
+    global _face_processor, _model_backend
+    logger.info("Starting up — loading face processor & model backend ...")
     t0 = time.time()
-    from api.processor import FaceProcessor  # late import
-    from api.engine import InferenceEngine  # late import
 
+    from api.processor import FaceProcessor
     _face_processor = FaceProcessor()
     logger.info("Face processor ready (%.1fs)", time.time() - t0)
 
-    _inference_engine = InferenceEngine()
-    logger.info("Inference engine ready (%.1fs)", time.time() - t0)
+    from api.backends import create_backend
+    _model_backend = create_backend(
+        name="litecuenet",
+        checkpoint_path=settings.CHECKPOINT_PATH,
+        device=settings.DEVICE,
+        clip_num=settings.CLIP_NUM,
+        clip_len=settings.CLIP_LEN,
+    )
+    logger.info("Model backend ready (%.1fs)", time.time() - t0)
     yield
-    # Shutdown: clean up Grad-CAM hooks
-    if _inference_engine is not None:
-        _inference_engine.gradcam.remove_hooks()
+
+    if _model_backend is not None:
+        _model_backend.cleanup()
     logger.info("API shutdown complete.")
 
 
@@ -76,7 +83,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="LiteCue-Net Deepfake Detection API",
-    version="1.0.0",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -129,20 +136,17 @@ class HealthResponse(BaseModel):
 
 @app.get("/api/v1/health", response_model=HealthResponse)
 async def health():
-    eng = _lazy_engine()
-    return HealthResponse(status="ok", device=str(eng.device))
+    backend = _lazy_backend()
+    return HealthResponse(status="ok", device=str(backend.device))
 
 
 @app.post("/api/v1/detect", response_model=DetectResponse)
 async def detect(file: UploadFile = File(...)):
-    """Upload a face video. Returns deepfake score and, for fake videos, Grad-CAM heatmaps."""
-    # --- Validate ---
+    """Upload a face video. Returns deepfake score and Grad-CAM heatmaps."""
     if file.content_type and not file.content_type.startswith("video/"):
         raise HTTPException(400, detail="Only video files are supported.")
 
-    # --- Save upload ---
     suffix = Path(file.filename or "upload.mp4").suffix or ".mp4"
-    import tempfile
     fd, tmp_path = tempfile.mkstemp(suffix=suffix)
     os.close(fd)
 
@@ -153,13 +157,12 @@ async def detect(file: UploadFile = File(...)):
         with open(tmp_path, "wb") as f:
             f.write(content)
 
-        # --- Process & infer ---
         t0 = time.time()
         processor = _lazy_face()
         tensor, meta = processor.process_video(tmp_path)
 
-        engine = _lazy_engine()
-        result = engine.predict_with_heatmap(tensor)
+        backend = _lazy_backend()
+        result = backend.predict_with_explain(tensor)
 
         elapsed_ms = round((time.time() - t0) * 1000, 2)
 

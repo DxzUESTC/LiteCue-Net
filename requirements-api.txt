@@ -1,16 +1,12 @@
 # LiteCue-Net FastAPI 推理服务依赖
 #
-# 快速开始（模型与权重已随仓库提供，无需额外下载）：
-#   git lfs install && git lfs pull
+# 快速开始：
 #   pip install -r requirements-api.txt
 #   python api/main.py
 #
-# PyTorch（需自行安装 CUDA 版）
-#   pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
-#
 # 推理资源路径（默认，一般无需改）：
 #   checkpoints/exp_20260511/best_model.pth
-#   models/buffalo_l/*.onnx
+#   models/buffalo_l/det_10g.onnx
 torch==2.5.1
 torchvision==0.20.1
 
@@ -18,8 +14,11 @@ torchvision==0.20.1
 timm==1.0.22
 einops==0.8.1
 
+# ONNX Runtime (RetinaFace face detection)
+onnxruntime>=1.15.0
+
 # 图像/视频处理
-opencv-python==4.12.0.88
+opencv-python>=4.8.0
 pillow==11.3.0
 
 # 数值计算
@@ -30,8 +29,3 @@ fastapi==0.136.0
 uvicorn==0.46.0
 python-multipart==0.0.26
 pydantic==2.12.4
-
-# Face detection (insightface / RetinaFace)
-insightface==0.7.3
-# ONNX Runtime (CUDA): pip install onnxruntime-gpu (match your CUDA version)
-# The onnx CPU package is auto-installed by insightface as a dependency.

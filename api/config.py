@@ -1,68 +1,49 @@
-"""API configuration, matching the checkpoint at checkpoints/exp_20260511/best_model.pth."""
+"""API configuration — service & preprocessing params only.
+
+Model architecture parameters are auto-discovered from the checkpoint
+by the backend at load time (see api/backends/litecuenet.py).
+"""
 
 import os
 from pathlib import Path
 
-# InsightFace buffalo_l pack (bundled under models/buffalo_l/, tracked in repo / Git LFS)
-BUFFALO_L_ONNX_FILES = (
-    "det_10g.onnx",
-    "w600k_r50.onnx",
-    "1k3d68.onnx",
-    "2d106det.onnx",
-    "genderage.onnx",
-)
-
 
 class Settings:
-    # Paths
+    # --- Paths ---
     BASE_DIR = Path(__file__).resolve().parent.parent
     CHECKPOINT_PATH = os.getenv(
         "CHECKPOINT_PATH",
         str(BASE_DIR / "checkpoints" / "exp_20260511" / "best_model.pth"),
     )
-    # Note: insightface.app.FaceAnalysis(name="buffalo_l", root=X) internally
-    # resolves to X/models/buffalo_l, so INSIGHTFACE_ROOT must point to the
-    # parent of models/ (the project root), not models/ itself.
-    INSIGHTFACE_ROOT = os.getenv(
-        "INSIGHTFACE_ROOT",
-        str(BASE_DIR),
+    RETINA_MODEL_PATH = str(
+        BASE_DIR / "models" / "buffalo_l" / "det_10g.onnx"
     )
 
-    # --- LiteCueNet architecture (must match checkpoint) ---
-    FEATURE_DIM = 256
-    CLIP_NUM = 16  # M
-    CLIP_LEN = 4  # K
-    NUM_CLASSES = 2
-    BACKBONE_NAME = "mobilenetv4_conv_small.e2400_r224_in1k"
-    USE_FREQUENCY_BRANCH = True
-    FREQUENCY_FUSE_BLOCK = 2
-    TEMPORAL_MODULE = "attention"
+    # --- Input protocol (must match what the model expects) ---
+    CLIP_NUM = 16   # M
+    CLIP_LEN = 4    # K
 
-    # Face detection
+    # --- Face detection (RetinaFace via ONNX Runtime) ---
     DET_SIZE = (640, 640)
     FACE_SIZE = 224
 
-    # API server
+    # --- API server ---
     HOST = os.getenv("API_HOST", "0.0.0.0")
-    PORT = int(os.getenv("API_PORT", "8000"))
+    PORT = int(os.getenv("API_PORT", "8001"))
     MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100 MB
 
-    # Device
+    # --- Device ---
     DEVICE = os.getenv("DEVICE", "cuda")
 
-    # Grad-CAM: number of top keyframes to return when video is fake
+    # --- Grad-CAM: top keyframes to return ---
     TOP_K_FRAMES = 6
 
 
 settings = Settings()
 
 
-def insightface_model_dir() -> Path:
-    return Path(settings.INSIGHTFACE_ROOT) / "models" / "buffalo_l"
-
-
 def verify_api_assets() -> None:
-    """Ensure bundled checkpoint and InsightFace ONNX files are present."""
+    """Ensure bundled checkpoint and face detection model are present."""
     ckpt = Path(settings.CHECKPOINT_PATH)
     if not ckpt.is_file():
         raise FileNotFoundError(
@@ -70,23 +51,10 @@ def verify_api_assets() -> None:
             "Ensure the repo is fully cloned (checkpoints/exp_20260511/best_model.pth)."
         )
 
-    model_dir = insightface_model_dir()
-    missing = [f for f in BUFFALO_L_ONNX_FILES if not (model_dir / f).is_file()]
-    if missing:
-        lfs_hint = (
-            " If ONNX files are only a few KB, run: git lfs install && git lfs pull"
-        )
+    det = Path(settings.RETINA_MODEL_PATH)
+    if not det.is_file():
         raise FileNotFoundError(
-            f"InsightFace buffalo_l models missing under {model_dir}: {missing}\n"
-            f"Clone the repo with Git LFS, or run: python scripts/download_models.py"
-            f"{lfs_hint}"
+            f"Face detection model not found: {det}\n"
+            "Restore from git:\n"
+            "  git checkout -- models/buffalo_l/det_10g.onnx"
         )
-
-    # Detect Git LFS pointer stubs (clone without `git lfs pull`)
-    for name in BUFFALO_L_ONNX_FILES:
-        path = model_dir / name
-        if path.stat().st_size < 1024:
-            raise FileNotFoundError(
-                f"{path} looks like a Git LFS pointer ({path.stat().st_size} bytes).\n"
-                "Run: git lfs install && git lfs pull"
-            )

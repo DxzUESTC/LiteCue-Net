@@ -4,31 +4,25 @@ import logging
 from typing import Dict, List, Tuple
 
 import cv2
-import insightface
 import numpy as np
-from insightface.utils import face_align
 
-from api.config import settings, verify_api_assets
+from api.config import settings
+from api.core.face_align import norm_crop
+from api.core.face_detector import get_landmarks, pick_largest_face
+from api.core.retinaface_detector import RetinaFaceDetector
+from api.core.normalize import normalize_frames
 
 logger = logging.getLogger(__name__)
-
-_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
-_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
 
 class FaceProcessor:
     """Detect, align, and crop faces from video frames, then build the (1, M, K, 3, H, W) input tensor."""
 
     def __init__(self):
-        verify_api_assets()
-        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        self.app = insightface.app.FaceAnalysis(
-            name="buffalo_l",
-            root=settings.INSIGHTFACE_ROOT,
-            providers=providers,
+        self._detector = RetinaFaceDetector(
+            model_path=settings.RETINA_MODEL_PATH,
+            input_size=settings.DET_SIZE,
         )
-        ctx_id = 0 if settings.DEVICE == "cuda" else -1
-        self.app.prepare(ctx_id=ctx_id, det_size=settings.DET_SIZE)
 
     def process_video(self, video_path: str) -> Tuple[np.ndarray, Dict]:
         """Load a video, sample frames, detect+align faces, build the input tensor.
@@ -50,7 +44,7 @@ class FaceProcessor:
         required = M * K  # 64
 
         indices = _sample_indices(total_frames, M, K)
-        faces, face_ok = _extract_faces(self.app, cap, indices, required)
+        faces, face_ok = _extract_faces(self._detector, cap, indices, required)
 
         cap.release()
 
@@ -65,25 +59,6 @@ class FaceProcessor:
         }
         return tensor, metadata
 
-    def extract_face_mid(self, video_path: str) -> np.ndarray:
-        """Extract a single aligned face from roughly the middle of the video (for Grad-CAM overlay)."""
-        cap = cv2.VideoCapture(video_path)
-        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        mid = total // 2
-        cap.set(cv2.CAP_PROP_POS_FRAMES, mid)
-        ret, frame = cap.read()
-        cap.release()
-        if not ret:
-            return None
-
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        dets = self.app.get(rgb)
-        if not dets:
-            return None
-        areas = [(d.bbox[2] - d.bbox[0]) * (d.bbox[3] - d.bbox[1]) for d in dets]
-        best = dets[np.argmax(areas)]
-        return face_align.norm_crop(rgb, landmark=best.kps, image_size=settings.FACE_SIZE)
-
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -91,28 +66,37 @@ class FaceProcessor:
 
 
 def _sample_indices(total_frames: int, M: int, K: int) -> np.ndarray:
-    """Global-sparse + local-dense sampling (same strategy as training).
+    """Global-sparse + local-dense sampling, aligned with training validation mode.
 
-    Divides the video into M segments and takes K consecutive frames from each.
+    Divides the video into M segments and takes K consecutive frames from
+    the centre of each segment.  Falls back to np.linspace for short videos.
     """
     required = M * K
     if total_frames <= required:
         return np.linspace(0, max(total_frames - 1, 0), required, dtype=int)
 
-    seg_size = total_frames / M
+    interval = total_frames // M
     indices = []
-    half_k = K // 2
+
     for i in range(M):
-        center = int((i + 0.5) * seg_size)
+        seg_start = i * interval
+        seg_end = (i + 1) * interval if i < M - 1 else total_frames
+        seg_len = seg_end - seg_start
+
+        if seg_len >= K:
+            offset = (seg_len - K) // 2  # centre of segment
+        else:
+            offset = 0
         for j in range(K):
-            idx = center - half_k + j
+            idx = seg_start + offset + j
             idx = max(0, min(total_frames - 1, idx))
             indices.append(idx)
+
     return np.array(indices, dtype=int)
 
 
 def _extract_faces(
-    app: insightface.app.FaceAnalysis,
+    detector: RetinaFaceDetector,
     cap: cv2.VideoCapture,
     indices: np.ndarray,
     required: int,
@@ -120,7 +104,8 @@ def _extract_faces(
     """Run face detection + alignment on sampled frame indices.
 
     Returns (aligned_faces, face_ok_flags).
-    When no face is found, repeats the last successful face (or centre-crop)."""
+    When no face is found, repeats the last successful face (or centre-crop).
+    """
     faces: List[np.ndarray] = []
     face_ok: List[bool] = []
 
@@ -132,30 +117,39 @@ def _extract_faces(
             continue
 
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        dets = app.get(rgb)
+        results = detector.detect(rgb)
+        face = pick_largest_face(results)
 
-        if dets:
-            # Pick the largest face
-            areas = [(d.bbox[2] - d.bbox[0]) * (d.bbox[3] - d.bbox[1]) for d in dets]
-            best = dets[np.argmax(areas)]
-            aligned = face_align.norm_crop(rgb, landmark=best.kps, image_size=settings.FACE_SIZE)
+        if face is not None:
+            landmarks = get_landmarks(face)
+            aligned = norm_crop(rgb, landmarks, image_size=settings.FACE_SIZE)
             faces.append(aligned)
             face_ok.append(True)
         else:
             _pad_or_centrecrop(faces, face_ok, rgb)
 
-    # Ensure exactly `required` frames
     while len(faces) < required:
         if faces:
             faces.append(faces[-1].copy())
             face_ok.append(face_ok[-1])
         else:
-            # No faces at all — create a blank fallback
             blank = np.zeros((settings.FACE_SIZE, settings.FACE_SIZE, 3), dtype=np.uint8)
             faces.append(blank)
             face_ok.append(False)
 
     return faces[:required], face_ok[:required]
+
+
+def _build_tensor(faces: List[np.ndarray], M: int, K: int) -> np.ndarray:
+    """Normalise and reshape face list into model input.
+
+    faces: list of (224, 224, 3) uint8 RGB arrays.
+    returns (1, M, K, 3, 224, 224) float32.
+    """
+    arr = np.stack(faces, axis=0)
+    arr = normalize_frames(arr)
+    arr = arr.reshape(1, M, K, 3, settings.FACE_SIZE, settings.FACE_SIZE)
+    return arr
 
 
 def _pad_last(faces: list, face_ok: list) -> None:
@@ -176,16 +170,3 @@ def _pad_or_centrecrop(faces: list, face_ok: list, rgb: np.ndarray) -> None:
     crop = cv2.resize(rgb[y : y + size, x : x + size], (settings.FACE_SIZE, settings.FACE_SIZE))
     faces.append(crop)
     face_ok.append(False)
-
-
-def _build_tensor(faces: List[np.ndarray], M: int, K: int) -> np.ndarray:
-    """Normalise and reshape face list into model input.
-
-    faces: list of (224, 224, 3) uint8 RGB arrays.
-    returns (1, M, K, 3, 224, 224) float32.
-    """
-    arr = np.stack(faces, axis=0).astype(np.float32) / 255.0  # (N, 224, 224, 3)
-    arr = (arr - _MEAN) / _STD
-    arr = arr.transpose(0, 3, 1, 2)  # (N, 3, 224, 224)
-    arr = arr.reshape(1, M, K, 3, settings.FACE_SIZE, settings.FACE_SIZE)
-    return arr

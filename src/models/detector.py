@@ -7,7 +7,6 @@ from .backbones.mobilenet_v4 import MobileNetV4Backbone
 from .components.intra_clip import IntraClipModule
 from .components.inter_clip import InterClipModule, InterClipAttention
 from .components.reviewer import HistoricalReviewModule, LearnableDecayHRM
-from src.losses.generalization import DomainClassifier
 
 class LiteCueNet(nn.Module):
     """
@@ -141,6 +140,7 @@ class LiteCueNet(nn.Module):
 
         self.domain_classifier = None
         if num_domains and num_domains > 1:
+            from src.losses.generalization import DomainClassifier
             self.domain_classifier = DomainClassifier(feature_dim, num_domains)
 
     def forward(self, x, return_features=False, return_domain=False):

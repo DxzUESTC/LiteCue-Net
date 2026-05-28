@@ -191,7 +191,7 @@ curl http://localhost:8000/api/v1/health
 | `heatmap_frames[].frame_index` | int | 帧在采样序列中的索引 (0~63) |
 | `heatmap_frames[].clip_index` | int | 所属 clip 索引 (0~15) |
 | `heatmap_frames[].clip_fake_probability` | float | 该 clip 的伪造概率 |
-| `heatmap_frames[].heatmap_base64` | str | JET 伪彩热力图 JPEG 的 base64 编码 |
+| `heatmap_frames[].heatmap_base64` | str | Grad-CAM 叠在对齐人脸上的 JPEG（base64） |
 
 **错误响应：**
 
@@ -321,7 +321,7 @@ Top-6 clips 筛选:
   3. 每个选中 clip 内:
        - 4 帧分别计算 CAM 均值
        - 取均值最高的帧作为关键帧
-  4. CAM resize 到 224×224 → JET 伪彩 → JPEG → base64
+  4. 反归一化对应 224×224 对齐人脸 → CAM 叠加热力图（55% 人脸 + 45% JET）→ JPEG → base64
 
 输出: 最多 6 帧热力图（无论真假始终返回）
 ```
@@ -330,7 +330,7 @@ Top-6 clips 筛选:
 
 - `engine.py::GradCAM` — 钩子注册与管理
 - `engine.py::GradCAM.generate` — 前向+反向+CAM 计算
-- `engine.py::_cam_to_base64` — CAM → JET 伪彩 → base64 JPEG
+- `engine.py::_overlay_cam_to_base64` — CAM 叠在对齐人脸上 → base64 JPEG
 
 ---
 
